@@ -1,0 +1,153 @@
+stages:
+  - test
+  - quality
+  - build
+  - deploy
+  - verify
+
+variables:
+  DOCKER_HUB_USERNAME: "YOUR_DOCKERHUB_USERNAME"
+  BACKEND_IMAGE: "${DOCKER_HUB_USERNAME}/task-manager-backend"
+  FRONTEND_IMAGE: "${DOCKER_HUB_USERNAME}/task-manager-frontend"
+  DOCKER_DRIVER: overlay2
+
+# Test Stage
+test:backend:
+  stage: test
+  image: node:18-alpine
+  script:
+    - cd app/backend
+    - npm install
+    - npm test
+  coverage: '/All files[^|]*\|[^|]*\s+([\d\.]+)/'
+  artifacts:
+    reports:
+      junit: app/backend/test-results/*.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: app/backend/coverage/cobertura-coverage.xml
+    paths:
+      - app/backend/coverage/
+    expire_in: 1 week
+  tags:
+    - docker
+
+# Quality Stage
+sonarqube:check:
+  stage: quality
+  image: sonarsource/sonar-scanner-cli:latest
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+    GIT_DEPTH: "0"
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  script:
+    - sonar-scanner
+      -Dsonar.projectKey=task-manager
+      -Dsonar.projectName=Task-Manager
+      -Dsonar.sources=app/backend
+      -Dsonar.exclusions=**/*.test.js,**/node_modules/**
+      -Dsonar.javascript.lcov.reportPaths=app/backend/coverage/lcov.info
+      -Dsonar.host.url=${SONAR_HOST_URL}
+      -Dsonar.login=${SONAR_TOKEN}
+  allow_failure: true
+  only:
+    - main
+    - develop
+  tags:
+    - docker
+
+# Build Stage
+build:backend:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - echo $DOCKER_HUB_PASSWORD | docker login -u $DOCKER_HUB_USERNAME --password-stdin
+  script:
+    - cd app/backend
+    - docker build -t ${BACKEND_IMAGE}:${CI_COMMIT_SHORT_SHA} .
+    - docker tag ${BACKEND_IMAGE}:${CI_COMMIT_SHORT_SHA} ${BACKEND_IMAGE}:latest
+    - docker push ${BACKEND_IMAGE}:${CI_COMMIT_SHORT_SHA}
+    - docker push ${BACKEND_IMAGE}:latest
+  after_script:
+    - docker logout
+  only:
+    - main
+    - develop
+  tags:
+    - docker
+
+build:frontend:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - echo $DOCKER_HUB_PASSWORD | docker login -u $DOCKER_HUB_USERNAME --password-stdin
+  script:
+    - cd app/frontend
+    - docker build -t ${FRONTEND_IMAGE}:${CI_COMMIT_SHORT_SHA} .
+    - docker tag ${FRONTEND_IMAGE}:${CI_COMMIT_SHORT_SHA} ${FRONTEND_IMAGE}:latest
+    - docker push ${FRONTEND_IMAGE}:${CI_COMMIT_SHORT_SHA}
+    - docker push ${FRONTEND_IMAGE}:latest
+  after_script:
+    - docker logout
+  only:
+    - main
+    - develop
+  tags:
+    - docker
+
+# Deploy Stage
+deploy:kubernetes:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  script:
+    - kubectl config use-context ${KUBE_CONTEXT}
+    - kubectl apply -f kubernetes/namespace.yaml
+    - kubectl apply -f kubernetes/backend-deployment.yaml
+    - kubectl apply -f kubernetes/backend-service.yaml
+    - kubectl apply -f kubernetes/frontend-deployment.yaml
+    - kubectl apply -f kubernetes/frontend-service.yaml
+    - kubectl set image deployment/backend backend=${BACKEND_IMAGE}:${CI_COMMIT_SHORT_SHA} -n task-manager
+    - kubectl set image deployment/frontend frontend=${FRONTEND_IMAGE}:${CI_COMMIT_SHORT_SHA} -n task-manager
+  only:
+    - main
+  environment:
+    name: production
+    url: http://your-app-url.com
+  tags:
+    - kubernetes
+
+# Verify Stage
+verify:deployment:
+  stage: verify
+  image: bitnami/kubectl:latest
+  script:
+    - kubectl rollout status deployment/backend -n task-manager --timeout=5m
+    - kubectl rollout status deployment/frontend -n task-manager --timeout=5m
+    - kubectl get pods -n task-manager
+    - kubectl get services -n task-manager
+    - echo "✅ Deployment verified successfully!"
+  only:
+    - main
+  tags:
+    - kubernetes
+
+# Rollback job (manual trigger)
+rollback:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  script:
+    - kubectl rollout undo deployment/backend -n task-manager
+    - kubectl rollout undo deployment/frontend -n task-manager
+    - echo "🔄 Rollback completed"
+  when: manual
+  only:
+    - main
+  tags:
+    - kubernetes
