@@ -1,54 +1,13 @@
+// Compatibility wrapper: keep this variant aligned with Jenkinsfile-complete.
+// In Jenkins, prefer Script Path: Atelier-8-CI-CD-Pipeline/Jenkinsfile-complete
 pipeline {
     agent any
-    
-    environment {
-        DOCKER_HUB_CREDENTIALS = credentials('dockerhub-credentials')
-        DOCKER_HUB_USERNAME = 'wacimabdelli'
-        BACKEND_IMAGE = "${DOCKER_HUB_USERNAME}/task-manager-backend"
-        FRONTEND_IMAGE = "${DOCKER_HUB_USERNAME}/task-manager-frontend"
-    }
-    
+
     stages {
-        stage('Build Images') {
+        stage('Use Jenkinsfile-complete') {
             steps {
-                echo '🐳 Building Docker images...'
-                dir('C:\\Users\\pc\\Desktop\\devops\\Atelier-8-CI-CD-Pipeline') {
-                    bat 'docker build -t %BACKEND_IMAGE%:latest app/backend'
-                    bat 'docker build -t %FRONTEND_IMAGE%:latest app/frontend'
-                }
+                error 'Use Atelier-8-CI-CD-Pipeline/Jenkinsfile-complete for the fixed pipeline.'
             }
-        }
-        
-        stage('Push to Docker Hub') {
-            steps {
-                echo '📤 Pushing to Docker Hub...'
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                    bat '''
-                        docker login -u %DOCKER_USER% -p %DOCKER_PASS%
-                        docker push %BACKEND_IMAGE%:latest
-                        docker push %FRONTEND_IMAGE%:latest
-                        docker logout
-                    '''
-                }
-            }
-        }
-        
-        stage('Deploy to Kubernetes') {
-            steps {
-                echo '☸️ Deploying to Kubernetes...'
-                bat 'C:\\Users\\pc\\Desktop\\devops\\Atelier-7-Kubernetes\\minikube.exe kubectl -- rollout restart deployment/backend -n task-manager'
-                bat 'C:\\Users\\pc\\Desktop\\devops\\Atelier-7-Kubernetes\\minikube.exe kubectl -- rollout restart deployment/frontend -n task-manager'
-                bat 'C:\\Users\\pc\\Desktop\\devops\\Atelier-7-Kubernetes\\minikube.exe kubectl -- get pods -n task-manager'
-            }
-        }
-    }
-    
-    post {
-        success {
-            echo '✅ Pipeline SUCCESS! App deployed to Kubernetes!'
-        }
-        failure {
-            echo '❌ Pipeline FAILED!'
         }
     }
 }

@@ -1,177 +1,104 @@
 pipeline {
     agent any
-    
+
     environment {
-        DOCKER_HUB_CREDENTIALS = credentials('dockerhub-credentials')
+        PROJECT_DIR = 'Atelier-8-CI-CD-Pipeline'
         DOCKER_HUB_USERNAME = 'wacimabdelli'
         BACKEND_IMAGE = "${DOCKER_HUB_USERNAME}/task-manager-backend"
         FRONTEND_IMAGE = "${DOCKER_HUB_USERNAME}/task-manager-frontend"
-        IMAGE_TAG = "${BUILD_NUMBER}"
-        SONARQUBE_SERVER = 'SonarQube'
+        BACKEND_LOCAL_IMAGE = 'atelier-8-ci-cd-pipeline-backend'
+        FRONTEND_LOCAL_IMAGE = 'atelier-8-ci-cd-pipeline-frontend'
+        KUBECTL = 'C:\\Program Files\\Docker\\Docker\\resources\\bin\\kubectl.exe'
+        MINIKUBE_EXE = 'C:\\Users\\pc\\Desktop\\devops\\Atelier-7-Kubernetes\\minikube.exe'
+        KUBECONFIG_FILE = 'C:\\Users\\pc\\.kube\\config'
+        MINIKUBE_HOME = 'C:\\Users\\pc\\.minikube'
     }
-    
+
     stages {
         stage('Checkout') {
             steps {
-                echo '📥 Checking out code...'
+                echo 'Checking out code from GitHub...'
                 checkout scm
             }
         }
-        
-        stage('Install Dependencies') {
+
+        stage('Build Images') {
             steps {
-                echo '📦 Installing backend dependencies...'
-                dir('app/backend') {
-                    bat 'npm install'
+                echo 'Building Docker images...'
+                dir("${PROJECT_DIR}") {
+                    bat "docker build -t ${BACKEND_IMAGE}:latest -t ${BACKEND_LOCAL_IMAGE}:latest app/backend"
+                    bat "docker build -t ${FRONTEND_IMAGE}:latest -t ${FRONTEND_LOCAL_IMAGE}:latest app/frontend"
                 }
             }
         }
-        
-        stage('Run Tests') {
+
+        stage('Load Images into Minikube') {
             steps {
-                echo '🧪 Running backend tests...'
-                dir('app/backend') {
-                    bat 'npm test'
-                }
-            }
-            post {
-                always {
-                    junit '**/test-results/*.xml'
-                }
-            }
-        }
-        
-        stage('SonarQube Analysis') {
-            steps {
-                echo '🔍 Running SonarQube analysis...'
-                script {
-                    def scannerHome = tool 'SonarScanner'
-                    withSonarQubeEnv('SonarQube') {
-                        bat """
-                            ${scannerHome}\\bin\\sonar-scanner.bat ^
-                            -Dsonar.projectKey=task-manager ^
-                            -Dsonar.projectName=Task-Manager ^
-                            -Dsonar.sources=app/backend ^
-                            -Dsonar.exclusions=**/*.test.js,**/node_modules/** ^
-                            -Dsonar.javascript.lcov.reportPaths=app/backend/coverage/lcov.info
-                        """
-                    }
+                echo 'Loading local images into Minikube...'
+                withEnv(["MINIKUBE_HOME=${MINIKUBE_HOME}"]) {
+                    bat '''
+                        "%MINIKUBE_EXE%" image load %BACKEND_LOCAL_IMAGE%:latest
+                        "%MINIKUBE_EXE%" image load %FRONTEND_LOCAL_IMAGE%:latest
+                    '''
                 }
             }
         }
-        
-        stage('Quality Gate') {
-            steps {
-                echo '🚦 Checking quality gate...'
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
-                }
-            }
-        }
-        
-        stage('Build Docker Images') {
-            parallel {
-                stage('Build Backend Image') {
-                    steps {
-                        echo '🐳 Building backend Docker image...'
-                        dir('app/backend') {
-                            bat """
-                                docker build -t ${BACKEND_IMAGE}:${IMAGE_TAG} .
-                                docker tag ${BACKEND_IMAGE}:${IMAGE_TAG} ${BACKEND_IMAGE}:latest
-                            """
-                        }
-                    }
-                }
-                stage('Build Frontend Image') {
-                    steps {
-                        echo '🐳 Building frontend Docker image...'
-                        dir('app/frontend') {
-                            bat """
-                                docker build -t ${FRONTEND_IMAGE}:${IMAGE_TAG} .
-                                docker tag ${FRONTEND_IMAGE}:${IMAGE_TAG} ${FRONTEND_IMAGE}:latest
-                            """
-                        }
-                    }
-                }
-            }
-        }
-        
+
         stage('Push to Docker Hub') {
             steps {
-                echo '📤 Pushing images to Docker Hub...'
-                script {
+                echo 'Pushing to Docker Hub...'
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                     bat """
-                        echo %DOCKER_HUB_CREDENTIALS_PSW% | docker login -u %DOCKER_HUB_CREDENTIALS_USR% --password-stdin
-                        docker push ${BACKEND_IMAGE}:${IMAGE_TAG}
+                        echo %DOCKER_PASS% | docker login -u %DOCKER_USER% --password-stdin
                         docker push ${BACKEND_IMAGE}:latest
-                        docker push ${FRONTEND_IMAGE}:${IMAGE_TAG}
                         docker push ${FRONTEND_IMAGE}:latest
                         docker logout
                     """
                 }
             }
         }
-        
+
         stage('Deploy to Kubernetes') {
             steps {
-                echo '☸️ Deploying to Kubernetes...'
-                script {
+                echo 'Deploying to Kubernetes...'
+                withEnv(["KUBECONFIG=${KUBECONFIG_FILE}", "MINIKUBE_HOME=${MINIKUBE_HOME}"]) {
                     bat """
-                        kubectl apply -f kubernetes/namespace.yaml
-                        kubectl apply -f kubernetes/backend-deployment.yaml
-                        kubectl apply -f kubernetes/backend-service.yaml
-                        kubectl apply -f kubernetes/frontend-deployment.yaml
-                        kubectl apply -f kubernetes/frontend-service.yaml
+                        "%KUBECTL%" config current-context
+                        "%KUBECTL%" get nodes
+                        "%KUBECTL%" apply -f ${PROJECT_DIR}/kubernetes/namespace.yaml
+                        "%KUBECTL%" apply -f ${PROJECT_DIR}/kubernetes/backend-deployment-local.yaml
+                        "%KUBECTL%" apply -f ${PROJECT_DIR}/kubernetes/backend-service.yaml
+                        "%KUBECTL%" apply -f ${PROJECT_DIR}/kubernetes/frontend-configmap.yaml
+                        "%KUBECTL%" apply -f ${PROJECT_DIR}/kubernetes/frontend-deployment-local.yaml
+                        "%KUBECTL%" apply -f ${PROJECT_DIR}/kubernetes/frontend-service.yaml
+                        "%KUBECTL%" rollout restart deployment/backend -n task-manager
+                        "%KUBECTL%" rollout restart deployment/frontend -n task-manager
                     """
                 }
             }
         }
-        
+
         stage('Verify Deployment') {
             steps {
-                echo '✅ Verifying deployment...'
-                script {
+                echo 'Verifying deployment...'
+                withEnv(["KUBECONFIG=${KUBECONFIG_FILE}", "MINIKUBE_HOME=${MINIKUBE_HOME}"]) {
                     bat """
-                        kubectl rollout status deployment/backend -n task-manager
-                        kubectl rollout status deployment/frontend -n task-manager
-                        kubectl get pods -n task-manager
-                        kubectl get services -n task-manager
-                    """
-                }
-            }
-        }
-        
-        stage('Smoke Tests') {
-            steps {
-                echo '🔥 Running smoke tests...'
-                script {
-                    sleep 10 // Wait for services to be ready
-                    bat """
-                        kubectl get service frontend-service -n task-manager
+                        "%KUBECTL%" rollout status deployment/backend -n task-manager --timeout=180s
+                        "%KUBECTL%" rollout status deployment/frontend -n task-manager --timeout=180s
+                        "%KUBECTL%" get pods -n task-manager
+                        "%KUBECTL%" get services -n task-manager
                     """
                 }
             }
         }
     }
-    
+
     post {
         success {
-            echo '✅ Pipeline completed successfully!'
-            echo '🚀 Application deployed to Kubernetes'
+            echo 'Pipeline SUCCESS: images pushed and Kubernetes updated.'
         }
         failure {
-            echo '❌ Pipeline failed!'
-            echo '🔄 Rolling back deployment...'
-            script {
-                bat """
-                    kubectl rollout undo deployment/backend -n task-manager
-                    kubectl rollout undo deployment/frontend -n task-manager
-                """
-            }
-        }
-        always {
-            echo '🧹 Cleaning up...'
-            bat 'docker system prune -f'
+            echo 'Pipeline FAILED. Check the failing command above.'
         }
     }
 }

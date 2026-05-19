@@ -1,37 +1,54 @@
 pipeline {
     agent any
-    
+
     environment {
         DOCKER_HUB_USERNAME = 'wacimabdelli'
         BACKEND_IMAGE = "${DOCKER_HUB_USERNAME}/task-manager-backend"
         FRONTEND_IMAGE = "${DOCKER_HUB_USERNAME}/task-manager-frontend"
-        MINIKUBE_PATH = 'C:\\Users\\pc\\Desktop\\devops\\Atelier-7-Kubernetes\\minikube.exe'
+        BACKEND_LOCAL_IMAGE = 'atelier-8-ci-cd-pipeline-backend'
+        FRONTEND_LOCAL_IMAGE = 'atelier-8-ci-cd-pipeline-frontend'
+        KUBECTL = 'C:\\Program Files\\Docker\\Docker\\resources\\bin\\kubectl.exe'
+        MINIKUBE_EXE = 'C:\\Users\\pc\\Desktop\\devops\\Atelier-7-Kubernetes\\minikube.exe'
+        KUBECONFIG_FILE = 'C:\\Users\\pc\\.kube\\config'
+        MINIKUBE_HOME = 'C:\\Users\\pc\\.minikube'
     }
-    
+
     stages {
         stage('Checkout') {
             steps {
-                echo '📥 Checking out code from GitHub...'
+                echo 'Checking out code from GitHub...'
                 git branch: 'main', url: 'https://github.com/wacim-abdellli/devops-workshop.git'
             }
         }
-        
+
         stage('Build Images') {
             steps {
-                echo '🐳 Building Docker images...'
+                echo 'Building Docker images...'
                 dir('Atelier-8-CI-CD-Pipeline') {
-                    bat 'docker build -t %BACKEND_IMAGE%:latest app/backend'
-                    bat 'docker build -t %FRONTEND_IMAGE%:latest app/frontend'
+                    bat 'docker build -t %BACKEND_IMAGE%:latest -t %BACKEND_LOCAL_IMAGE%:latest app/backend'
+                    bat 'docker build -t %FRONTEND_IMAGE%:latest -t %FRONTEND_LOCAL_IMAGE%:latest app/frontend'
                 }
             }
         }
-        
+
+        stage('Load Images into Minikube') {
+            steps {
+                echo 'Loading local images into Minikube...'
+                withEnv(["MINIKUBE_HOME=${MINIKUBE_HOME}"]) {
+                    bat '''
+                        "%MINIKUBE_EXE%" image load %BACKEND_LOCAL_IMAGE%:latest
+                        "%MINIKUBE_EXE%" image load %FRONTEND_LOCAL_IMAGE%:latest
+                    '''
+                }
+            }
+        }
+
         stage('Push to Docker Hub') {
             steps {
-                echo '📤 Pushing to Docker Hub...'
+                echo 'Pushing to Docker Hub...'
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                     bat '''
-                        docker login -u %DOCKER_USER% -p %DOCKER_PASS%
+                        echo %DOCKER_PASS% | docker login -u %DOCKER_USER% --password-stdin
                         docker push %BACKEND_IMAGE%:latest
                         docker push %FRONTEND_IMAGE%:latest
                         docker logout
@@ -39,44 +56,48 @@ pipeline {
                 }
             }
         }
-        
+
         stage('Deploy to Kubernetes') {
             steps {
-                echo '☸️ Deploying to Kubernetes...'
-                bat '''
-                    %MINIKUBE_PATH% kubectl -- apply -f Atelier-8-CI-CD-Pipeline/kubernetes/namespace.yaml
-                    %MINIKUBE_PATH% kubectl -- apply -f Atelier-8-CI-CD-Pipeline/kubernetes/backend-deployment.yaml
-                    %MINIKUBE_PATH% kubectl -- apply -f Atelier-8-CI-CD-Pipeline/kubernetes/backend-service.yaml
-                    %MINIKUBE_PATH% kubectl -- apply -f Atelier-8-CI-CD-Pipeline/kubernetes/frontend-configmap.yaml
-                    %MINIKUBE_PATH% kubectl -- apply -f Atelier-8-CI-CD-Pipeline/kubernetes/frontend-deployment-local.yaml
-                    %MINIKUBE_PATH% kubectl -- apply -f Atelier-8-CI-CD-Pipeline/kubernetes/frontend-service.yaml
-                    %MINIKUBE_PATH% kubectl -- rollout restart deployment/backend -n task-manager
-                    %MINIKUBE_PATH% kubectl -- rollout restart deployment/frontend -n task-manager
-                '''
+                echo 'Deploying to Kubernetes...'
+                withEnv(["KUBECONFIG=${KUBECONFIG_FILE}", "MINIKUBE_HOME=${MINIKUBE_HOME}"]) {
+                    bat '''
+                        "%KUBECTL%" config current-context
+                        "%KUBECTL%" get nodes
+                        "%KUBECTL%" apply -f Atelier-8-CI-CD-Pipeline/kubernetes/namespace.yaml
+                        "%KUBECTL%" apply -f Atelier-8-CI-CD-Pipeline/kubernetes/backend-deployment-local.yaml
+                        "%KUBECTL%" apply -f Atelier-8-CI-CD-Pipeline/kubernetes/backend-service.yaml
+                        "%KUBECTL%" apply -f Atelier-8-CI-CD-Pipeline/kubernetes/frontend-configmap.yaml
+                        "%KUBECTL%" apply -f Atelier-8-CI-CD-Pipeline/kubernetes/frontend-deployment-local.yaml
+                        "%KUBECTL%" apply -f Atelier-8-CI-CD-Pipeline/kubernetes/frontend-service.yaml
+                        "%KUBECTL%" rollout restart deployment/backend -n task-manager
+                        "%KUBECTL%" rollout restart deployment/frontend -n task-manager
+                    '''
+                }
             }
         }
-        
+
         stage('Verify Deployment') {
             steps {
-                echo '✅ Verifying deployment...'
-                bat '''
-                    %MINIKUBE_PATH% kubectl -- get pods -n task-manager
-                    %MINIKUBE_PATH% kubectl -- get services -n task-manager
-                '''
+                echo 'Verifying deployment...'
+                withEnv(["KUBECONFIG=${KUBECONFIG_FILE}", "MINIKUBE_HOME=${MINIKUBE_HOME}"]) {
+                    bat '''
+                        "%KUBECTL%" rollout status deployment/backend -n task-manager --timeout=180s
+                        "%KUBECTL%" rollout status deployment/frontend -n task-manager --timeout=180s
+                        "%KUBECTL%" get pods -n task-manager
+                        "%KUBECTL%" get services -n task-manager
+                    '''
+                }
             }
         }
     }
-    
+
     post {
         success {
-            echo '✅ ========================================='
-            echo '✅ PIPELINE SUCCESS!'
-            echo '✅ Application deployed to Kubernetes!'
-            echo '✅ Images pushed to Docker Hub!'
-            echo '✅ ========================================='
+            echo 'PIPELINE SUCCESS: Application deployed to Kubernetes and images pushed to Docker Hub.'
         }
         failure {
-            echo '❌ Pipeline FAILED!'
+            echo 'Pipeline FAILED. Check the failing command above.'
         }
     }
 }

@@ -1,88 +1,13 @@
+// Compatibility wrapper: keep this variant from running the old broken kubectl commands.
+// In Jenkins, prefer Script Path: Atelier-8-CI-CD-Pipeline/Jenkinsfile-complete
 pipeline {
     agent any
-    
-    environment {
-        DOCKER_HUB_CREDENTIALS = credentials('dockerhub-credentials')
-        DOCKER_HUB_USERNAME = 'wacimabdelli'
-        BACKEND_IMAGE = "${DOCKER_HUB_USERNAME}/task-manager-backend"
-        FRONTEND_IMAGE = "${DOCKER_HUB_USERNAME}/task-manager-frontend"
-        IMAGE_TAG = "${BUILD_NUMBER}"
-    }
-    
+
     stages {
-        stage('Checkout') {
+        stage('Use Jenkinsfile-complete') {
             steps {
-                echo '📥 Checking out code from GitHub...'
-                git branch: 'main', url: 'https://github.com/wacim-abdellli/devops-workshop.git'
+                error 'Use Atelier-8-CI-CD-Pipeline/Jenkinsfile-complete for the fixed pipeline.'
             }
-        }
-        
-        stage('Build Docker Images') {
-            steps {
-                echo '🐳 Building Docker images...'
-                dir('Atelier-8-CI-CD-Pipeline') {
-                    bat """
-                        docker build -t ${BACKEND_IMAGE}:${IMAGE_TAG} -t ${BACKEND_IMAGE}:latest app/backend
-                        docker build -t ${FRONTEND_IMAGE}:${IMAGE_TAG} -t ${FRONTEND_IMAGE}:latest app/frontend
-                    """
-                }
-            }
-        }
-        
-        stage('Push to Docker Hub') {
-            steps {
-                echo '📤 Pushing images to Docker Hub...'
-                bat """
-                    echo %DOCKER_HUB_CREDENTIALS_PSW% | docker login -u %DOCKER_HUB_CREDENTIALS_USR% --password-stdin
-                    docker push ${BACKEND_IMAGE}:${IMAGE_TAG}
-                    docker push ${BACKEND_IMAGE}:latest
-                    docker push ${FRONTEND_IMAGE}:${IMAGE_TAG}
-                    docker push ${FRONTEND_IMAGE}:latest
-                    docker logout
-                """
-            }
-        }
-        
-        stage('Deploy to Kubernetes') {
-            steps {
-                echo '☸️ Deploying to Kubernetes...'
-                dir('Atelier-8-CI-CD-Pipeline') {
-                    bat """
-                        kubectl apply -f kubernetes/namespace.yaml
-                        kubectl apply -f kubernetes/backend-deployment.yaml
-                        kubectl apply -f kubernetes/backend-service.yaml
-                        kubectl apply -f kubernetes/frontend-configmap.yaml
-                        kubectl apply -f kubernetes/frontend-deployment-local.yaml
-                        kubectl apply -f kubernetes/frontend-service.yaml
-                        kubectl rollout restart deployment/backend -n task-manager
-                        kubectl rollout restart deployment/frontend -n task-manager
-                    """
-                }
-            }
-        }
-        
-        stage('Verify Deployment') {
-            steps {
-                echo '✅ Verifying deployment...'
-                bat """
-                    kubectl get pods -n task-manager
-                    kubectl get services -n task-manager
-                """
-            }
-        }
-    }
-    
-    post {
-        success {
-            echo '✅ Pipeline completed successfully!'
-            echo '🚀 Application deployed to Kubernetes'
-        }
-        failure {
-            echo '❌ Pipeline failed!'
-        }
-        always {
-            echo '🧹 Cleaning up Docker images...'
-            bat 'docker image prune -f'
         }
     }
 }

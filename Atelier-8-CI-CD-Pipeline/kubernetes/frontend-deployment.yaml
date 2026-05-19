@@ -24,7 +24,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: wassimabdelli/task-manager-frontend:latest
+        image: wacimabdelli/task-manager-frontend:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 80
